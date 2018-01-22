@@ -217,84 +217,157 @@ class sspmod_saml_SP_LogoutStore {
 		}
 	}
 
+	/**
+	 * Can the store be used to log out (the given) sessions?
+	 *
+	 * A valid store must be configured and either indexes must be known or a queryable datastore must be used.
+	 *
+	 * @param array $sessionIndexes
+	 * @return bool
+	 */
+    public static function canLogoutSessions($sessionIndexes = array())
+    {
+        $store = \SimpleSAML\Store\SQL::getInstance();
+        if ($store === FALSE) {
+            /* We don't have a datastore. */
+            return FALSE;
+        }
+        if (empty($sessionIndexes) && !$store instanceof \SimpleSAML\Store\SQL) {
+            /* We cannot fetch all sessions without a SQL store. */
+            return FALSE;
+        }
+        return TRUE;
+    }
+
 
 	/**
-	 * Log out of the given sessions.
+	 * Get all associations for all given session indexes.
 	 *
-	 * @param string $authId  The authsource ID.
-	 * @param \SAML2\XML\saml\NameID $nameId The NameID of the user.
-	 * @param array $sessionIndexes  The SessionIndexes we should log out of. Logs out of all if this is empty.
-	 * @returns int|FALSE  Number of sessions logged out, or FALSE if not supported.
+	 * @param string $authId		AuthSource ID
+	 * @param array $nameId			Name Identifier to get the sessions for.
+	 * @param array $sessionIndexes	SessionIndexes (Session IDs) to get the sessions for.
+	 * @return array
 	 */
-	public static function logoutSessions($authId, $nameId, array $sessionIndexes) {
-		assert('is_string($authId)');
+	public static function collectSessionAssociations($authId, array $nameId, array $sessionIndexes = array()) {
+    		$associations = array();
 
-		$store = \SimpleSAML\Store::getInstance();
-		if ($store === FALSE) {
-			/* We don't have a datastore. */
-			return FALSE;
-		}
+    		self::foreachSessionIndex(
+        			$authId,
+        			$nameId,
+        			$sessionIndexes,
+        			function ($sessions, $sessionIndex) use (&$associations, $authId) {
+        				if (!isset($sessions[$sessionIndex])) {
+            					return;
+ 				}
 
-		// serialize and anonymize the NameID
-		// TODO: remove this conditional statement
-		if (is_array($nameId)) {
-			$nameId = \SAML2\XML\saml\NameID::fromArray($nameId);
-		}
-		$strNameId = serialize($nameId);
-		$strNameId = sha1($strNameId);
+ 				$sessionId = $sessions[$sessionIndex];
 
-		/* Normalize SessionIndexes. */
-		foreach ($sessionIndexes as &$sessionIndex) {
-			assert('is_string($sessionIndex)');
-			if (strlen($sessionIndex) > 50) {
-				$sessionIndex = sha1($sessionIndex);
-			}
-		}
-		unset($sessionIndex); // Remove reference
+ 				$session = SimpleSAML_Session::getSession($sessionId);
+ 				if ($session === NULL) {
+            					return;
+ 				}
 
-		if ($store instanceof \SimpleSAML\Store\SQL) {
-			$sessions = self::getSessionsSQL($store, $authId, $strNameId);
-		} elseif (empty($sessionIndexes)) {
-			/* We cannot fetch all sessions without a SQL store. */
-			return FALSE;
-		} else {
-			/** @var \SimpleSAML\Store $sessions At this point the store cannot be false */
-			$sessions = self::getSessionsStore($store, $authId, $strNameId, $sessionIndexes);
+ 				if (!$session->isValid($authId)) {
+            					return;
+ 				}
 
-		}
+ 				$associations = array_merge_recursive($associations, $session->getAllAssociations());
+ 			}
+ 		);
+ 		return $associations;
+ 	}
 
-		if (empty($sessionIndexes)) {
-			$sessionIndexes = array_keys($sessions);
-		}
+    /**
+     * Log out of the given sessions.
+     *
+     * @param string $authId The authsource ID.
+     * @param array $nameId The NameID of the user.
+     * @param array $sessionIndexes The SessionIndexes we should log out of. Logs out of all if this is empty.
+     * @returns int|FALSE  Number of sessions logged out, or FALSE if not supported.
+     */
+    public static function logoutSessions($authId, array $nameId, array $sessionIndexes) {
+        $numLoggedOut = 0;
+        self::foreachSessionIndex(
+            $authId,
+            $nameId,
+            $sessionIndexes,
+            function ($sessions, $sessionIndex) use ($authId, &$numLoggedOut) {
+                $numLoggedOut += sspmod_saml_SP_LogoutStore::logoutSession($authId, $sessions, $sessionIndex);
+            }
+        );
+        return $numLoggedOut;
+    }
 
-		$sessionHandler = \SimpleSAML\SessionHandler::getSessionHandler();
+    protected static function logoutSession($authId, $sessions, $sessionIndex) {
+        if (!isset($sessions[$sessionIndex])) {
+            \SimpleSAML\Logger::info('saml.LogoutStore: Logout requested for unknown SessionIndex.');
+            return 0;
+        }
 
-		$numLoggedOut = 0;
-		foreach ($sessionIndexes as $sessionIndex) {
-			if (!isset($sessions[$sessionIndex])) {
-				SimpleSAML\Logger::info('saml.LogoutStore: Logout requested for unknown SessionIndex.');
-				continue;
-			}
+        $sessionId = $sessions[$sessionIndex];
 
-			$sessionId = $sessions[$sessionIndex];
+        $session = SimpleSAML_Session::getSession($sessionId);
+        if ($session === NULL) {
+            \SimpleSAML\Logger::info('saml.LogoutStore: Skipping logout of missing session.');
+            return 0;
+        }
 
-			$session = SimpleSAML_Session::getSession($sessionId);
-			if ($session === NULL) {
-				SimpleSAML\Logger::info('saml.LogoutStore: Skipping logout of missing session.');
-				continue;
-			}
+        if (!$session->isValid($authId)) {
+            \SimpleSAML\Logger::info('saml.LogoutStore: Skipping logout of session because it isn\'t authenticated.');
+            return 0;
+        }
 
-			if (!$session->isValid($authId)) {
-				SimpleSAML\Logger::info('saml.LogoutStore: Skipping logout of session because it isn\'t authenticated.');
-				continue;
-			}
+        \SimpleSAML\Logger::info('saml.LogoutStore: Logging out of session with trackId [' . $session->getTrackID() . '].');
+        $session->doLogout($authId);
+        return 1;
+    }
 
-			SimpleSAML\Logger::info('saml.LogoutStore: Logging out of session with trackId [' . $session->getTrackID() . '].');
-			$session->doLogout($authId);
-			$numLoggedOut += 1;
-		}
 
-		return $numLoggedOut;
-	}
+    protected static function foreachSessionIndex($authId, array $nameId, array $sessionIndexes, $callback) {
+        assert('is_string($authId)');
 
+        $store = SimpleSAML\Store::getInstance();
+        if ($store === FALSE) {
+            /* We don't have a datastore. */
+            return FALSE;
+        }
+
+        // serialize and anonymize the NameID
+        // TODO: remove this conditional statement
+        if (is_array($nameId)) {
+            $nameId = \SAML2\XML\saml\NameID::fromArray($nameId);
+        }
+        $strNameId = serialize($nameId);
+        $strNameId = sha1($strNameId);
+
+        /* Normalize SessionIndexes. */
+        foreach ($sessionIndexes as &$sessionIndex) {
+            assert('is_string($sessionIndex)');
+            if (strlen($sessionIndex) > 50) {
+                $sessionIndex = sha1($sessionIndex);
+            }
+        }
+        unset($sessionIndex); // Remove reference
+
+        if ($store instanceof \SimpleSAML\Store\SQL) {
+            $sessions = self::getSessionsSQL($store, $authId, $strNameId);
+        } elseif (empty($sessionIndexes)) {
+            /* We cannot fetch all sessions without a SQL store. */
+            return FALSE;
+        } else {
+            $sessions = self::getSessionsStore($store, $authId, $strNameId, $sessionIndexes);
+
+        }
+
+        if (empty($sessionIndexes)) {
+            $sessionIndexes = array_keys($sessions);
+        }
+
+        $sessionHandler = \SimpleSAML\SessionHandler::getSessionHandler();
+
+        foreach ($sessionIndexes as $sessionIndex) {
+            $callback($sessionIndex, $sessions);
+        }
+        return true;
+    }
 }

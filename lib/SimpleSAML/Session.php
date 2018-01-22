@@ -376,6 +376,21 @@ class SimpleSAML_Session implements Serializable
         return $session;
     }
 
+    /**
+     * Retrieve all associations for all idps.
+     *
+     * Gets all associations for this session indexed by IdP ID, sub indexed by SP ID.
+     *
+     * @return array Associations in form [ idpId => [ spId => [ data ] ] ]
+     */
+	public function getAllAssociations()
+ 	{
+ 		if (!isset($this->associations)) {
+ 			$this->associations = array();
+ 		}
+
+		return $this->associations;
+ 	}
 
     /**
      * Load a given session as the current one.

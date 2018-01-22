@@ -102,6 +102,31 @@ if ($message instanceof \SAML2\LogoutResponse) {
 	$nameId = $message->getNameId();
 	$sessionIndexes = $message->getSessionIndexes();
 
+    // Get any associations these sessions have.
+    if (sspmod_saml_SP_LogoutStore::canLogoutSessions()) {
+        $associations = sspmod_saml_SP_LogoutStore::collectSessionAssociations($sourceId, $nameId, $sessionIndexes);
+    } else {
+        $associations = $source->collectAssociations($idpEntityId);
+    }
+
+    $isFrontChannelBinding = ($binding instanceof SAML2_HTTPPost || $binding instanceof SAML2_HTTPRedirect);
+    if (!empty($associations) && $isFrontChannelBinding) {
+        $state = array(
+            'saml:LogoutAssociations:remaining' => array_keys($associations),
+            'saml:LogoutAssociations:authSource' => $source,
+            'saml:LogoutAssociations:logoutRequest' => $message,
+            'saml:LogoutAssociations:spMetadata' => $spMetadata,
+            'saml:LogoutAssociations:idpMetadata' => $idpMetadata
+        );
+
+        // Save the state
+        $id = SimpleSAML_Auth_State::saveState($state, 'saml:LogoutAssociations');
+
+        // Kick off the logging out of associations.
+        $url = \SimpleSAML\Module::getModuleURL('saml/sp/saml2-logout-resume.php', array('id' => $id));
+        return \SimpleSAML\Utils\HTTP::redirectTrustedURL($url);
+    }
+
 	$numLoggedOut = sspmod_saml_SP_LogoutStore::logoutSessions($sourceId, $nameId, $sessionIndexes);
 	if ($numLoggedOut === FALSE) {
 		/* This type of logout was unsupported. Use the old method. */
@@ -117,6 +142,14 @@ if ($message instanceof \SAML2\LogoutResponse) {
 	if ($numLoggedOut < count($sessionIndexes)) {
 		SimpleSAML\Logger::warning('Logged out of ' . $numLoggedOut  . ' of ' . count($sessionIndexes) . ' sessions.');
 	}
+
+    if (!empty($associations)) {
+        \SimpleSAML\Logger::warning(
+            'Unable to log out IdP associations because a back-channel binding was used. ' .
+            'User will still be logged into SPs.'
+        );
+        $lr->setStatus(SAML2_Const::STATUS_PARTIAL_LOGOUT);
+    }
 
 	$dst = $idpMetadata->getEndpointPrioritizedByBinding('SingleLogoutService', array(
 		\SAML2\Constants::BINDING_HTTP_REDIRECT,

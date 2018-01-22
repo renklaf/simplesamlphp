@@ -174,6 +174,7 @@ abstract class SimpleSAML_Auth_Source
             'SimpleSAML_Auth_Source.ErrorURL' => $errorURL,
             'LoginCompletedHandler' => array(get_class(), 'loginCompleted'),
             'LogoutCallback' => array(get_class(), 'logoutCallback'),
+            'LogoutAssociationsCallback' => array(get_class(), 'logoutAssociationsCallback'),
             'LogoutCallbackState' => array(
                 'SimpleSAML_Auth_Default.logoutSource' => $this->authId, // TODO: remove in 2.0
                 'SimpleSAML_Auth_Source.logoutSource' => $this->authId,
@@ -379,6 +380,26 @@ abstract class SimpleSAML_Auth_Source
         $session->doLogout($source);
     }
 
+    /**
+	 * Called when the authentication source receives a request to know the open associations for a logout.
+	 *
+	 * @param array $state  State array for the logout operation.
+	 * @return array Associations by IdP
+	 */
+	public static function logoutAssociationsCallback($state) {
+		assert('is_array($state)');
+		assert('array_key_exists("SimpleSAML_Auth_Default.logoutSource", $state)');
+		$source = $state['SimpleSAML_Auth_Default.logoutSource'];
+		$session = SimpleSAML_Session::getInstance();
+		$authId = $session->getAuthority();
+		if ($authId !== $source) {
+			SimpleSAML_Logger::warning('Received logout from different authentication source ' .
+				'than the current. Current is ' . var_export($authId, TRUE) .
+				'. Logout source is ' . var_export($source, TRUE) . '.');
+			return array();
+		}
+		return $session->getAllAssociations();
+    }
 
     /**
      * Add a logout callback association.
@@ -423,6 +444,15 @@ abstract class SimpleSAML_Auth_Source
             $data,
             SimpleSAML_Session::DATA_TIMEOUT_SESSION_END
         );
+
+
+        if (!array_key_exists('LogoutAssociationsCallback', $state)) {
+            return;
+        }
+
+        $session->setData('SimpleSAML_Auth_Source.LogoutAssociationsCallbacks', $id, array(
+            'callback' => $state['LogoutAssociationsCallback'],
+            'state'	=> $callbackState));
     }
 
 

@@ -730,6 +730,35 @@ class sspmod_saml_Auth_Source_SP extends SimpleSAML_Auth_Source {
 		$this->callLogoutCallback($idpEntityId);
 	}
 
+    /**
+     * Get all associations for a given IdP entity Id,
+     * used for logging out all logged in SPs of a hosted IdP.
+     *
+     * @param string $idpEntityId
+     * @return array|mixed
+     */
+    public function collectAssociations($idpEntityId)
+    {
+        assert('is_string($idpEntityId)');
+
+        $id = strlen($this->authId) . ':' . $this->authId . $idpEntityId;
+
+        $session = SimpleSAML_Session::getSession();
+
+        $data = $session->getData('SimpleSAML_Auth_Source.LogoutAssociationsCallbacks', $id);
+        if ($data === NULL) {
+            return array();
+        }
+
+        assert('is_array($data)');
+        assert('array_key_exists("callback", $data)');
+        assert('array_key_exists("state", $data)');
+
+        $callback = $data['callback'];
+        $callbackState = $data['state'];
+
+        return call_user_func($callback, $callbackState);
+    }
 
 	/**
 	 * Handle an unsolicited login operations.
