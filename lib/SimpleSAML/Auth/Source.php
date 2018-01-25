@@ -393,7 +393,7 @@ abstract class SimpleSAML_Auth_Source
 		$session = SimpleSAML_Session::getInstance();
 		$authId = $session->getAuthority();
 		if ($authId !== $source) {
-			SimpleSAML_Logger::warning('Received logout from different authentication source ' .
+			SimpleSAML\Logger::warning('Received logout from different authentication source ' .
 				'than the current. Current is ' . var_export($authId, TRUE) .
 				'. Logout source is ' . var_export($source, TRUE) . '.');
 			return array();
